@@ -125,24 +125,62 @@ public class ClienteService {
     public boolean eliminarClientePorId(@NonNull Long id) {
         return clienteRepository.findById(id)
                 .map(cliente -> {
-                    // 1. Validar y eliminar TODAS las reservas asociadas (incluyendo
-                    // finalizadas/canceladas)
-                    validarYEliminarReservasCliente(cliente);
+                    // 1. Validar reservas activas (Check-in pendiente o en curso) -> Impide
+                    // eliminación
+                    validarReservasActivas(cliente);
 
-                    // 2. Capturar usuario asociado para posible eliminación
+                    // 2. Verificar si tiene historial financiero que debemos preservar (Reservas
+                    // FINALIZADAS)
+                    boolean tieneHistorial = reservaRepository.findByCliente(cliente).stream()
+                            .anyMatch(r -> EstadoReserva.FINALIZADA.getValor().equalsIgnoreCase(r.getEstadoReserva()));
+
                     Usuario usuario = cliente.getUsuario();
 
-                    // 3. Eliminar el cliente (Dueño de la FK usuario_id)
-                    clienteRepository.delete(cliente);
-                    clienteRepository.flush(); // Forzar sincronización
+                    if (tieneHistorial) {
+                        // >>> HISTORIAL EXISTE: ANONIMIZAR (SOFT DELETE) <<<
+                        // Objetivo: Mantener la integridad de los reportes de ingresos.
 
-                    // 4. Eliminar el usuario asociado si existe (Limpieza completa)
-                    if (usuario != null) {
-                        usuarioRepository.delete(usuario);
+                        // 1. Revocar acceso (Eliminar Usuario)
+                        if (usuario != null) {
+                            cliente.setUsuario(null);
+                            usuarioRepository.delete(usuario);
+                        }
+
+                        // 2. Anonimizar datos personales para liberar DNI/Email
+                        // Generamos un DNI dummy para evitar colisiones: 9 + ID (rellenado a 7 ceros)
+                        String dummyDni = String.format("9%07d", cliente.getId() % 10000000);
+
+                        cliente.setNombres("Cliente");
+                        cliente.setApellidos("Eliminado " + cliente.getId());
+                        cliente.setDni(dummyDni);
+                        cliente.setEmail("deleted_" + cliente.getId() + "@system.local");
+                        cliente.setTelefono(null);
+
+                        // 3. Guardar cambios
+                        clienteRepository.save(cliente);
+
+                        registrarAuditoriaEliminacion(cliente);
+                        logger.info("Cliente ID={} anonimizado (historial preservado).", id);
+
+                    } else {
+                        // >>> SIN HISTORIAL: ELIMINACIÓN FÍSICA (HARD DELETE) <<<
+                        // Solo tiene reservas canceladas o ninguna. Limpiamos todo.
+
+                        List<Reserva> reservas = reservaRepository.findByCliente(cliente);
+                        if (!reservas.isEmpty()) {
+                            reservaRepository.deleteAll(reservas);
+                        }
+
+                        clienteRepository.delete(cliente);
+                        clienteRepository.flush();
+
+                        if (usuario != null) {
+                            usuarioRepository.delete(usuario);
+                        }
+
+                        registrarAuditoriaEliminacion(cliente);
+                        logger.info("Cliente ID={} eliminado físicamente (sin historial).", id);
                     }
-
-                    registrarAuditoriaEliminacion(cliente);
-                    logger.info("Cliente y sus datos asociados eliminados: ID={}, DNI={}", id, cliente.getDni());
                     return true;
                 })
                 .orElse(false);
@@ -273,7 +311,7 @@ public class ClienteService {
         return clienteGuardado;
     }
 
-    private void validarYEliminarReservasCliente(Cliente cliente) {
+    private void validarReservasActivas(Cliente cliente) {
         List<Reserva> reservas = reservaRepository.findByCliente(cliente);
         List<ClienteConReservasActivasException.ReservaActivaResumen> reservasActivas = reservas.stream()
                 .filter(this::esReservaActiva)
@@ -283,10 +321,8 @@ public class ClienteService {
         if (!reservasActivas.isEmpty()) {
             throw new ClienteConReservasActivasException(cliente.getId(), reservasActivas);
         }
-
-        if (!reservas.isEmpty()) {
-            reservaRepository.deleteAll(reservas);
-        }
+        // Nota: Ya no eliminamos las reservas aquí. Eso se maneja en el método
+        // principal según el caso.
     }
 
     private boolean esReservaActiva(Reserva reserva) {
