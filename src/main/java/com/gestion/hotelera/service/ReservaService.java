@@ -539,11 +539,17 @@ public class ReservaService {
                 .collect(Collectors.toList());
 
         for (Reserva r : reservasExistentes) {
+            // Determinar fecha fin efectiva: Si ya finalizó, usamos la salida real (libera
+            // días si salió antes)
+            LocalDate finEfectivo = r.getFechaFin();
+            if (EstadoReserva.FINALIZADA.getValor().equalsIgnoreCase(r.getEstadoReserva())
+                    && r.getFechaSalidaReal() != null) {
+                finEfectivo = r.getFechaSalidaReal();
+            }
+
             // Se considera solapamiento si:
-            // (NuevaInicio < ExistenteFin) Y (NuevaFin > ExistenteInicio)
-            // Esto permite que una termine el mismo día que otra empieza (check-out am /
-            // check-in pm)
-            if (reserva.getFechaInicio().isBefore(r.getFechaFin()) &&
+            // (NuevaInicio < FinEfectivo) Y (NuevaFin > ExistenteInicio)
+            if (reserva.getFechaInicio().isBefore(finEfectivo) &&
                     reserva.getFechaFin().isAfter(r.getFechaInicio())) {
                 throw new IllegalArgumentException(
                         "La habitación ya está reservada en las fechas seleccionadas");
@@ -579,9 +585,11 @@ public class ReservaService {
         if (EstadoReserva.FINALIZADA.getValor().equalsIgnoreCase(reserva.getEstadoReserva())) {
             throw new IllegalStateException("No se puede cancelar una reserva finalizada");
         }
-        if (reserva.getPago() != null && "COMPLETADO".equalsIgnoreCase(reserva.getPago().getEstado())) {
+        // Solo restringir cancelación de pagados si NO es personal del hotel
+        boolean esPersonal = userRole.contains("ADMIN") || userRole.contains("RECEPCIONISTA");
+        if (!esPersonal && reserva.getPago() != null && "COMPLETADO".equalsIgnoreCase(reserva.getPago().getEstado())) {
             throw new IllegalStateException(
-                    "No se puede cancelar una reserva que ya tiene pago. Use 'Finalizar' en su lugar.");
+                    "No puede cancelar una reserva ya pagada. Contacte a recepción para solicitar reembolso/cancelación.");
         }
     }
 
