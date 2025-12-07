@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  app:
+    # Build the image from the current directory
+    build: .
+    # Use the requested image name
+    image: hotel-oasis7app:latest
+    container_name: hotel-oasis7app
+    ports:
+      - "8084:8084"
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:mysql://mysql_db:3306/Hotel_web_Oasis_db?createDatabaseIfNotExist=true&useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
+      - SPRING_DATASOURCE_USERNAME=root
+      - SPRING_DATASOURCE_PASSWORD=TAPIA
+      - WAIT_HOSTS=mysql_db:3306
+    depends_on:
+      - mysql_db
+    networks:
+      - hotel-network
+    restart: always
+
+  mysql_db:
+    image: mysql:8.0
+    container_name: hotel-oasis-db
+    ports:
+      - "3307:3306" # Mapped to 3307 on host to avoid conflict if local mysql is running on 3306
+    environment:
+      - MYSQL_DATABASE=Hotel_web_Oasis_db
+      - MYSQL_ROOT_PASSWORD=TAPIA
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - hotel-network
+    restart: always
+
+networks:
+  hotel-network:
+    driver: bridge
+
+volumes:
+  mysql_data:
